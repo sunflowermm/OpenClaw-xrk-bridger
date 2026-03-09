@@ -1,0 +1,33 @@
+{
+  "name": "OpenClaw-xrk-bridger",
+  "version": "0.1.0",
+  "description": "OpenClaw 通道插件：通过 XRK-AGT 自定义 Tasker 转发 QQ 事件。",
+  "type": "module",
+  "main": "dist/index.js",
+  "author": "XRK",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "openclaw": "^2026.3.0",
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "channel": {
+      "id": "xrk-agt",
+      "label": "XRK-AGT Bridge",
+      "selectionLabel": "XRK-AGT (Bridge)",
+      "docsPath": "/channels/xrk-agt",
+      "blurb": "通过 XRK-AGT Tasker 转发 QQ/事件。",
+      "order": 66
+    }
+  }
+}
+
