@@ -82,11 +82,15 @@ export class XrkBridgeClient extends EventEmitter {
       });
 
       this.ws.on("error", err => {
-        this.emit("error", err);
+        if (this.listenerCount("error") > 0) {
+          this.emit("error", err);
+        }
         this.handleDisconnect();
       });
     } catch (err) {
-      this.emit("error", err);
+      if (this.listenerCount("error") > 0) {
+        this.emit("error", err as Error);
+      }
       this.scheduleReconnect();
     }
   }
