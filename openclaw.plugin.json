@@ -1,9 +1,10 @@
 {
   "id": "xrk-agt-bridge",
+  "channels": ["xrk-agt"],
   "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
       "wsUrl": {
         "type": "string",
         "description": "XRK-AGT XrkBridge Tasker 的 WebSocket 地址，例如 ws://127.0.0.1:11451/XrkBridge"
@@ -12,10 +13,7 @@
         "type": "string",
         "description": "可选鉴权 Token，将作为 Authorization 头发送给 XRK-AGT"
       }
-    },
-    "required": [
-      "wsUrl"
-    ]
+    }
   },
   "uiHints": {
     "wsUrl": {

@@ -1,3 +1,4 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import { getXrkRuntime } from "./runtime.js";
 import { XrkBridgeClient, type XrkInboundMessage } from "./client.js";
 
@@ -15,7 +16,28 @@ export type ResolvedXrkAccount = {
   client?: XrkBridgeClient;
 };
 
+const DEFAULT_ACCOUNT_ID = "default";
 const clients = new Map<string, XrkBridgeClient>();
+
+function resolveAccountConfig(cfg: any, accountId?: string): ResolvedXrkAccount {
+  const id = accountId ?? DEFAULT_ACCOUNT_ID;
+  // 频道级配置：channels.xrk-agt 或 channels.xrk-agt.accounts[accountId]
+  const xrk = cfg.channels?.["xrk-agt"];
+  const accountConfig = id === DEFAULT_ACCOUNT_ID ? xrk : xrk?.accounts?.[id];
+
+  return {
+    accountId: id,
+    name: accountConfig?.name ?? "XRK-AGT Bridge",
+    enabled: true,
+    configured: Boolean(accountConfig?.wsUrl),
+    config: {
+      wsUrl: accountConfig?.wsUrl ?? "",
+      accessToken: accountConfig?.accessToken,
+      name: accountConfig?.name,
+      enabled: accountConfig?.enabled,
+    },
+  };
+}
 
 function getClientForAccount(accountId: string): XrkBridgeClient | null {
   const existing = clients.get(accountId);
@@ -23,10 +45,9 @@ function getClientForAccount(accountId: string): XrkBridgeClient | null {
 
   const runtime = getXrkRuntime();
   const cfg = runtime.config.loadConfig();
-  const pluginCfg = cfg.plugins?.entries?.["xrk-agt-bridge"]?.config ?? {};
-
-  const wsUrl: string | undefined = pluginCfg.wsUrl;
-  const accessToken: string | undefined = pluginCfg.accessToken;
+  const resolved = resolveAccountConfig(cfg, accountId);
+  const wsUrl: string | undefined = resolved.config.wsUrl;
+  const accessToken: string | undefined = resolved.config.accessToken;
 
   if (!wsUrl) return null;
 
@@ -137,7 +158,29 @@ async function handleInboundFromXrk(
   });
 }
 
-export const xrkChannel = {
+const XrkChannelConfigSchema: ChannelPlugin["configSchema"] = {
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      wsUrl: {
+        type: "string",
+        description:
+          "XRK-AGT XrkBridge Tasker 的 WebSocket 地址，例如 ws://127.0.0.1:11451/XrkBridge",
+      },
+      accessToken: {
+        type: "string",
+        description:
+          "可选鉴权 Token，将作为 Authorization 头发送给 XRK-AGT",
+      },
+    },
+  },
+};
+
+export const xrkChannel: ChannelPlugin<
+  ResolvedXrkAccount,
+  { ok: boolean; error?: string }
+> = {
   id: "xrk-agt",
   meta: {
     id: "xrk-agt",
@@ -150,26 +193,77 @@ export const xrkChannel = {
     chatTypes: ["direct"],
     media: true,
   },
-  // 提供最小的 config，供 health / status 等内部逻辑调用，实际连接配置走插件 entries.config
+  // 频道配置 schema：用于 Gateway UI 渲染表单（channels.xrk-agt）
+  configSchema: XrkChannelConfigSchema,
+  // 频道配置解析：从 openclaw.json 的 channels.xrk-agt 读取 wsUrl/accessToken
   config: {
-    listAccountIds: () => ["default"],
-    resolveAccount: (_cfg: any, accountId?: string): ResolvedXrkAccount => {
-      const id = accountId ?? "default";
-      return {
-        accountId: id,
-        name: "XRK-AGT Bridge",
-        enabled: true,
-        configured: true,
-        config: {
-          wsUrl: "",
-        },
-      };
+    listAccountIds: (cfg: any) => {
+      const xrk = cfg.channels?.["xrk-agt"];
+      if (!xrk) return [];
+      if (xrk.accounts) return Object.keys(xrk.accounts);
+      return [DEFAULT_ACCOUNT_ID];
     },
-    defaultAccountId: () => "default",
+    resolveAccount: (cfg: any, accountId?: string): ResolvedXrkAccount =>
+      resolveAccountConfig(cfg, accountId),
+    defaultAccountId: () => DEFAULT_ACCOUNT_ID,
     describeAccount: (acc: ResolvedXrkAccount) => ({
       accountId: acc.accountId,
-      configured: acc.configured ?? true,
+      configured: acc.configured ?? false,
     }),
+  },
+  status: {
+    async probeAccount({ account, timeoutMs }) {
+      if (!account.config.wsUrl) {
+        return { ok: false, error: "Missing wsUrl" };
+      }
+
+      // 已有运行中的客户端则认为连接正常
+      const runningClient = clients.get(account.accountId);
+      if (runningClient) {
+        return { ok: true };
+      }
+
+      // 否则做一次轻量级连通性探测
+      const client = new XrkBridgeClient({
+        wsUrl: account.config.wsUrl,
+        accessToken: account.config.accessToken,
+      });
+
+      return await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+        const timer = setTimeout(() => {
+          client.disconnect();
+          resolve({ ok: false, error: "Connection timeout" });
+        }, timeoutMs || 5_000);
+
+        client.on("connect", () => {
+          clearTimeout(timer);
+          client.disconnect();
+          resolve({ ok: true });
+        });
+
+        client.on("error", (err) => {
+          clearTimeout(timer);
+          client.disconnect();
+          resolve({ ok: false, error: String(err) });
+        });
+
+        client.connect();
+      });
+    },
+    buildAccountSnapshot({ account, probe }) {
+      const runningClient = clients.get(account.accountId);
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        running: Boolean(runningClient),
+        lastStartAt: null,
+        lastError:
+          probe && probe.ok === false ? probe.error ?? null : null,
+        probe,
+      };
+    },
   },
   // Inbound：由 runtime 注入事件时调用（见 index.ts）
   // Outbound：暂不实现，交由 XRK-AGT 负责真正发消息到 QQ/其它端。
