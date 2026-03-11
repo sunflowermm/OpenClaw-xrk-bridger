@@ -1,6 +1,6 @@
 {
   "name": "openclaw-xrk-bridger",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "OpenClaw 通道插件：通过 XRK-AGT 自定义 Tasker 转发 QQ 事件。",
   "type": "module",
   "main": "dist/index.js",
