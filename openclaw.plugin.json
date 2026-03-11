@@ -1,5 +1,5 @@
 {
-  "id": "xrk-agt-bridge",
+  "id": "openclaw-xrk-bridger",
   "channels": ["xrk-agt"],
   "configSchema": {
   "type": "object",

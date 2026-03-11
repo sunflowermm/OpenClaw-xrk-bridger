@@ -1,3 +1,5 @@
+import path from "node:path";
+import fs from "node:fs";
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import { getXrkRuntime } from "./runtime.js";
 import { XrkBridgeClient, type XrkInboundMessage } from "./client.js";
@@ -18,10 +20,51 @@ export type ResolvedXrkAccount = {
 
 const DEFAULT_ACCOUNT_ID = "default";
 const clients = new Map<string, XrkBridgeClient>();
+/** 每个账号最近一次入站对应的发送目标，用于将 xrk-agt:bot 解析为当前会话 */
+const lastToByAccount = new Map<string, string>();
+
+const STATE_DIR = process.env.OPENCLAW_STATE_DIR || path.join(process.cwd(), ".openclaw", "state");
+const LAST_TO_FILE = path.join(STATE_DIR, "xrk-bridger-last-to.json");
+const LAST_SELF_ID_FILE = path.join(STATE_DIR, "xrk-bridger-last-selfid.json");
+
+function loadLastToFromFile(): Record<string, string> {
+  try {
+    const s = fs.readFileSync(LAST_TO_FILE, "utf8");
+    return JSON.parse(s) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function saveLastToToFile(data: Record<string, string>) {
+  try {
+    fs.mkdirSync(path.dirname(LAST_TO_FILE), { recursive: true });
+    fs.writeFileSync(LAST_TO_FILE, JSON.stringify(data));
+  } catch (e) {
+    console.warn("[XRK-Bridge] could not persist lastTo:", (e as Error)?.message);
+  }
+}
+
+function resolveTo(to: string, accountId: string): { resolved: string; error?: string } {
+  const aid = accountId || DEFAULT_ACCOUNT_ID;
+  if (to === "xrk-agt:bot" || to.startsWith("xrk-agt:bot:")) {
+    let last = lastToByAccount.get(aid);
+    if (!last) {
+      const fromFile = loadLastToFromFile()[aid];
+      if (fromFile) {
+        last = fromFile;
+        lastToByAccount.set(aid, last);
+      }
+    }
+    if (last) return { resolved: last };
+    return { resolved: "", error: "Unknown target \"xrk-agt:bot\" for XRK-AGT Bridge. Send a message from QQ first, or specify to: user:QQ or group:ID." };
+  }
+  if (!to.includes(":") && /^\d+$/.test(to.trim())) return { resolved: `user:${to.trim()}` };
+  return { resolved: to };
+}
 
 function resolveAccountConfig(cfg: any, accountId?: string): ResolvedXrkAccount {
   const id = accountId ?? DEFAULT_ACCOUNT_ID;
-  // 频道级配置：channels.xrk-agt 或 channels.xrk-agt.accounts[accountId]
   const xrk = cfg.channels?.["xrk-agt"];
   const accountConfig = id === DEFAULT_ACCOUNT_ID ? xrk : xrk?.accounts?.[id];
 
@@ -72,16 +115,39 @@ async function handleInboundFromXrk(
   const runtime = getXrkRuntime();
   const cfg = runtime.config.loadConfig();
   const isGroup = event.kind === "group";
-  const fromId = isGroup
-    ? `xrk-group:${event.groupId ?? ""}:${event.userId}`
-    : `xrk-direct:${event.userId}`;
+  const fromId = isGroup ? String(event.groupId) : String(event.userId);
+  const deliveryTo = isGroup
+    ? `group:${event.groupId}`
+    : `user:${event.userId}`;
+  lastToByAccount.set(accountId, deliveryTo);
+  const persisted = loadLastToFromFile();
+  persisted[accountId] = deliveryTo;
+  saveLastToToFile(persisted);
+  if (event.selfId) {
+    try {
+      const selfIdData: Record<string, string> = (() => {
+        try {
+          return JSON.parse(fs.readFileSync(LAST_SELF_ID_FILE, "utf8"));
+        } catch {
+          return {};
+        }
+      })();
+      selfIdData[accountId] = event.selfId;
+      fs.mkdirSync(path.dirname(LAST_SELF_ID_FILE), { recursive: true });
+      fs.writeFileSync(LAST_SELF_ID_FILE, JSON.stringify(selfIdData));
+    } catch {
+      /* ignore */
+    }
+  }
 
   const text = (event.text || "").trim();
-  if (!text) return;
+  const mediaUrls = event.mediaUrls || [];
+  const files = event.files || [];
+  if (!text && mediaUrls.length === 0 && files.length === 0) return;
 
   const sessionLabel = isGroup
-    ? `XRK Group ${event.groupId} User ${event.userId}`
-    : `XRK Direct ${event.userId}`;
+    ? `XRK Group ${event.groupId}`
+    : `XRK User ${event.userId}`;
 
   const route = runtime.channel.routing.resolveAgentRoute({
     cfg,
@@ -96,21 +162,98 @@ async function handleInboundFromXrk(
   const deliver = async (payload: any) => {
     const client = getClientForAccount(accountId);
     if (!client) return;
-    const files =
-      payload.files?.map((f: any) => ({
-        url: f.url,
-        name: f.name,
-      })) ?? [];
-    if (!payload.text && files.length === 0) return;
+
+    console.log('[XRK-Bridge] deliver called, payload:', JSON.stringify(payload).substring(0, 200));
+
+    const outMediaUrls: string[] = [];
+    const outFiles: { url: string; name?: string }[] = [];
+    const fs = await import('fs');
+
+    const processUrl = async (url: string) => {
+      if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('base64://')) {
+        return url;
+      }
+      const filePath = url.replace(/^file:\/\/+/i, "").replace(/^\/([A-Za-z]:)/, "$1");
+      console.log('[XRK-Bridge] converting file to base64:', filePath);
+      if (fs.existsSync(filePath)) {
+        const buffer = fs.readFileSync(filePath);
+        const base64 = buffer.toString('base64');
+        console.log('[XRK-Bridge] base64 length:', base64.length);
+        return `base64://${base64}`;
+      }
+      console.log('[XRK-Bridge] file not found:', filePath);
+      return null;
+    };
+
+    if (payload.files && Array.isArray(payload.files)) {
+      for (const f of payload.files) {
+        if (f.url) {
+          const processed = await processUrl(f.url);
+          if (!processed) continue;
+
+          const source = f.name || f.url;
+          const ext = path.extname(source).toLowerCase();
+          const isImageLike = [
+            '.png',
+            '.jpg',
+            '.jpeg',
+            '.gif',
+            '.webp',
+            '.bmp',
+            '.svg',
+            '.heic',
+            '.heif',
+            '.avif',
+          ].includes(ext);
+
+          if (isImageLike) {
+            outMediaUrls.push(processed);
+          } else {
+            outFiles.push({ url: processed, name: f.name });
+          }
+        }
+      }
+    }
+
+    if (payload.mediaUrls && Array.isArray(payload.mediaUrls)) {
+      for (const url of payload.mediaUrls) {
+        const originalPath = url.replace(/^file:\/\/+/i, "").replace(/^\/([A-Za-z]:)/, "$1");
+        const processed = await processUrl(url);
+        if (!processed) continue;
+
+        const ext = path.extname(originalPath).toLowerCase();
+        const isImageLike = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif', '.avif'].includes(ext);
+
+        if (isImageLike || !ext) {
+          outMediaUrls.push(processed);
+        } else {
+          const fileName = path.basename(originalPath);
+          outFiles.push({ url: processed, name: fileName });
+        }
+      }
+    }
+
+    if (outMediaUrls.length === 0 && mediaUrls.length > 0) {
+      console.log('[XRK-Bridge] echoing user images');
+      outMediaUrls.push(...mediaUrls);
+    }
+
+    console.log('[XRK-Bridge] sending', outMediaUrls.length, 'media files and', outFiles.length, 'attachments');
+
+    if (!payload.text && outMediaUrls.length === 0 && outFiles.length === 0) return;
+
     client.sendReply({
       id: (event as any).id,
+      selfId: event.selfId,
       to: {
         kind: isGroup ? "group" as const : "direct" as const,
         userId: event.userId,
         groupId: event.groupId,
+        selfId: event.selfId,
       },
       text: payload.text,
-      files,
+      mediaUrls: outMediaUrls,
+      files: outFiles.length ? outFiles : undefined,
     });
   };
 
@@ -125,7 +268,7 @@ async function handleInboundFromXrk(
     Body: text,
     RawBody: text,
     SenderId: String(event.userId),
-    SenderName: event.userId,
+    SenderName: String(event.userId),
     ConversationLabel: sessionLabel,
     ThreadLabel: sessionLabel,
     SessionKey: route.sessionKey,
@@ -134,8 +277,10 @@ async function handleInboundFromXrk(
     Timestamp: Date.now(),
     Surface: "xrk-agt",
     OriginatingChannel: "xrk-agt",
-    OriginatingTo: fromId,
+    OriginatingTo: deliveryTo,
     CommandAuthorized: true,
+    ...(mediaUrls.length > 0 && { MediaUrls: mediaUrls }),
+    ...(files.length > 0 && { Files: files }),
   });
 
   await runtime.channel.session.recordInboundSession({
@@ -195,7 +340,6 @@ export const xrkChannel: ChannelPlugin<
   },
   // 频道配置 schema：用于 Gateway UI 渲染表单（channels.xrk-agt）
   configSchema: XrkChannelConfigSchema,
-  // 频道配置解析：从 openclaw.json 的 channels.xrk-agt 读取 wsUrl/accessToken
   config: {
     listAccountIds: (cfg: any) => {
       const xrk = cfg.channels?.["xrk-agt"];
@@ -265,8 +409,91 @@ export const xrkChannel: ChannelPlugin<
       };
     },
   },
-  // Inbound：由 runtime 注入事件时调用（见 index.ts）
-  // Outbound：暂不实现，交由 XRK-AGT 负责真正发消息到 QQ/其它端。
+  outbound: {
+    deliveryMode: "direct" as const,
+    sendText: async ({ to, text, accountId }) => {
+      const client = getClientForAccount(accountId || DEFAULT_ACCOUNT_ID);
+      if (!client) {
+        return { channel: "xrk-agt", sent: false, error: "Client not connected", messageId: null };
+      }
+
+      const { resolved, error: resolveError } = resolveTo(to, accountId || DEFAULT_ACCOUNT_ID);
+      if (resolveError) return { channel: "xrk-agt", sent: false, error: resolveError, messageId: null };
+      const [kind, ...parts] = resolved.split(":");
+      if (kind === "group" && parts.length > 0) {
+        client.sendReply({
+          id: Date.now().toString(),
+          to: { kind: "group", userId: "", groupId: parts[0] },
+          text,
+        });
+      } else if (kind === "user" && parts.length > 0) {
+        client.sendReply({
+          id: Date.now().toString(),
+          to: { kind: "direct", userId: parts[0] },
+          text,
+        });
+      } else {
+        return { channel: "xrk-agt", sent: false, error: "Invalid target format (use user:QQ or group:ID)", messageId: null };
+      }
+
+      return { channel: "xrk-agt", sent: true, messageId: null };
+    },
+    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
+      const client = getClientForAccount(accountId || DEFAULT_ACCOUNT_ID);
+      if (!client) {
+        return { channel: "xrk-agt", sent: false, error: "Client not connected", messageId: null };
+      }
+
+      const { resolved, error: resolveError } = resolveTo(to, accountId || DEFAULT_ACCOUNT_ID);
+      if (resolveError) return { channel: "xrk-agt", sent: false, error: resolveError, messageId: null };
+      const [kind, ...parts] = resolved.split(":");
+      const inputUrls = mediaUrl ? [mediaUrl] : [];
+      const outMediaUrls: string[] = [];
+      if (inputUrls.length > 0) {
+        const fs = await import("fs");
+        const processUrl = async (url: string) => {
+          if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("base64://")) return url;
+          const filePath = url.replace(/^file:\/\/+/i, "").replace(/^\/([A-Za-z]:)/, "$1");
+          if (fs.existsSync(filePath)) {
+            const buffer = fs.readFileSync(filePath);
+            return `base64://${buffer.toString("base64")}`;
+          }
+          return null;
+        };
+        for (const url of inputUrls) {
+          const p = await processUrl(url);
+          if (p) outMediaUrls.push(p);
+        }
+      }
+      const finalMediaUrls = outMediaUrls;
+      let selfId: string | undefined;
+      try {
+        selfId = JSON.parse(fs.readFileSync(LAST_SELF_ID_FILE, "utf8"))[accountId || DEFAULT_ACCOUNT_ID];
+      } catch {}
+
+      if (kind === "group" && parts.length > 0) {
+        client.sendReply({
+          id: Date.now().toString(),
+          selfId,
+          to: { kind: "group", userId: "", groupId: parts[0], selfId },
+          text,
+          mediaUrls: finalMediaUrls,
+        });
+      } else if (kind === "user" && parts.length > 0) {
+        client.sendReply({
+          id: Date.now().toString(),
+          selfId,
+          to: { kind: "direct", userId: parts[0], selfId },
+          text,
+          mediaUrls: finalMediaUrls,
+        });
+      } else {
+        return { channel: "xrk-agt", sent: false, error: "Invalid target format (use user:QQ or group:ID)", messageId: null };
+      }
+
+      return { channel: "xrk-agt", sent: true, messageId: null };
+    },
+  },
 };
 
 export function attachInboundHandlerForAccount(accountId: string) {

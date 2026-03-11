@@ -14,18 +14,23 @@ export interface XrkInboundMessage {
   userId: string;
   groupId?: string;
   text: string;
+  mediaUrls?: string[];
+  files?: { url: string; name?: string }[];
   raw?: any;
 }
 
 export interface XrkOutboundReply {
   id?: string;
+  selfId?: string;
   to: {
     kind: "direct" | "group";
     userId: string;
     groupId?: string;
+    selfId?: string;
   };
   text?: string;
   files?: { url: string; name?: string }[];
+  mediaUrls?: string[];
 }
 
 /**
