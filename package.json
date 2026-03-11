@@ -1,16 +1,11 @@
 {
-  "name": "@sunflowermm/openclaw-xrk-bridger",
+  "name": "openclaw-xrk-bridger",
   "version": "0.1.7",
   "description": "OpenClaw 通道插件：通过 XRK-AGT 自定义 Tasker 转发 QQ 事件。",
   "type": "module",
   "main": "dist/index.js",
   "author": "XRK",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/sunflowermm/openclaw-xrk-bridger.git"
-  },
-  "keywords": ["openclaw", "xrk-agt", "qq", "onebot", "bridge", "plugin"],
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },
