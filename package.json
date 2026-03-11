@@ -1,6 +1,9 @@
 {
-  "name": "openclaw-xrk-bridger",
+  "name": "@sunflowermm/openclaw-xrk-bridger",
   "version": "0.1.9",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "description": "OpenClaw 通道插件：通过 XRK-AGT 自定义 Tasker 转发 QQ 事件。",
   "type": "module",
   "main": "dist/index.js",
