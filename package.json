@@ -6,6 +6,11 @@
   "main": "dist/index.js",
   "author": "XRK",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sunflowermm/openclaw-xrk-bridger.git"
+  },
+  "keywords": ["openclaw", "xrk-agt", "qq", "onebot", "bridge", "plugin"],
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },
