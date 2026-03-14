@@ -22,30 +22,6 @@ async function processUrl(url: string): Promise<string | null> {
   return null;
 }
 
-/** 从 URL 或本地路径推断默认文件名（仅当 agent 未提供 name 时用） */
-function defaultFileNameFromUrl(url: string): string | undefined {
-  if (!url || url.startsWith("base64://")) return undefined;
-  try {
-    if (url.startsWith("file://")) {
-      const p = url.replace(/^file:\/\/+/i, "").replace(/^\/([A-Za-z]:)/, "$1");
-      return path.basename(p) || undefined;
-    }
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      const u = new URL(url);
-      const segment = path.basename(u.pathname);
-      return segment || undefined;
-    }
-    // Windows 绝对路径 (C:\...) 或含路径分隔符的本地路径
-    if (/^[A-Za-z]:[\\/]/.test(url) || url.includes("\\") || url.includes("/")) {
-      const name = path.basename(url);
-      return name || undefined;
-    }
-  } catch {
-    // ignore
-  }
-  return undefined;
-}
-
 export type ResolvedXrkAccount = {
   accountId: string;
   name?: string;
@@ -153,10 +129,6 @@ function getClientForAccount(accountId: string): XrkBridgeClient | null {
     console.log(`[XRK-AGT] Bridge disconnected for account ${accountId}`);
     connectedByAccount.set(accountId, false);
   });
-  // 入站消息只在此处挂载一次，避免 register 多次执行时重复挂载导致一条消息触发多次 agent
-  client.on("message", (event: XrkInboundMessage) =>
-    void handleInboundFromXrk(accountId, event),
-  );
   client.connect();
   clients.set(accountId, client);
   return client;
@@ -203,55 +175,35 @@ async function handleInboundFromXrk(accountId: string, event: XrkInboundMessage)
     const client = getClientForAccount(accountId);
     if (!client) return;
 
-    const nMedia = payload.mediaUrls?.length ?? 0;
-    const nFiles = payload.files?.length ?? 0;
-    const keys = payload ? Object.keys(payload).filter((k: string) => payload[k] != null) : [];
-    console.warn(
-      `[XRK-Bridge] deliver 收到 payload: keys=[${keys.join(",")}] text=${payload.text ? "有" : "无"} mediaUrls=${nMedia} files=${nFiles}`,
-    );
-    if (nMedia > 0) {
-      payload.mediaUrls.forEach((url: string, i: number) => {
-        console.warn(`[XRK-Bridge]   mediaUrls[${i}] 长度=${typeof url === "string" ? url.length : 0} 前50字符=${typeof url === "string" ? url.slice(0, 50) : ""}`);
-      });
-    }
-    if (nFiles > 0) {
-      payload.files.forEach((f: any, i: number) => {
-        console.warn(`[XRK-Bridge]   files[${i}] name=${f.name ?? "(未传)"} url前80字符=${typeof f.url === "string" ? f.url.slice(0, 80) : f.url}`);
-      });
-    }
-    if (nMedia > 0 && nFiles === 0) {
-      console.warn(`[XRK-Bridge] 当前回复只有 mediaUrls 没有 files，无法带文件名，发到 QQ 会显示为 file.xxx；请用 files: [{ url, name: "真实文件名.pptx" }] 代替 mediaUrls`);
-    }
-
-    const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".heic", ".heif", ".avif"]);
+    const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif', '.avif'];
     const outMediaUrls: string[] = [];
     const outFiles: { url: string; name?: string }[] = [];
 
-    const items: { url: string; name?: string }[] = [
-      ...(payload.files?.filter((f: any) => f.url).map((f: any) => ({ url: f.url, name: f.name })) ?? []),
-      ...(payload.mediaUrls?.map((url: string) => ({ url })) ?? []),
-    ];
-    for (const { url, name } of items) {
+    const processFile = async (url: string, name?: string) => {
       const processed = await processUrl(url);
-      if (!processed) continue;
-      const resolvedName = name?.trim() || defaultFileNameFromUrl(url);
-      const ext = path.extname(resolvedName || url).toLowerCase();
-      if (IMAGE_EXTS.has(ext)) outMediaUrls.push(processed);
-      else outFiles.push({ url: processed, name: resolvedName || undefined });
+      if (!processed) return;
+      const ext = path.extname(name || url).toLowerCase();
+      if (IMAGE_EXTS.includes(ext)) {
+        outMediaUrls.push(processed);
+      } else {
+        outFiles.push({ url: processed, name });
+      }
+    };
+
+    if (payload.files) {
+      for (const f of payload.files) {
+        if (f.url) await processFile(f.url, f.name);
+      }
+    }
+
+    if (payload.mediaUrls) {
+      for (const url of payload.mediaUrls) {
+        await processFile(url);
+      }
     }
 
     if (!outMediaUrls.length && mediaUrls.length) outMediaUrls.push(...mediaUrls);
     if (!payload.text && !outMediaUrls.length && !outFiles.length) return;
-
-    console.warn(
-      `[XRK-Bridge] sendReply 将发往 XRK: text=${payload.text ? "有" : "无"} mediaUrls=${outMediaUrls.length} files=${outFiles.length}`,
-    );
-    outFiles.forEach((f, i) => {
-      console.warn(`[XRK-Bridge]   → files[${i}] name=${f.name ?? "(无)"}`);
-    });
-    if (outMediaUrls.length > 0 && outFiles.length === 0) {
-      console.warn(`[XRK-Bridge]   → 本次 mediaUrls 中有非图片会以文件形式发到 QQ，无 name，将显示为 file.xxx`);
-    }
 
     client.sendReply({
       id: (event as any).id,
@@ -429,7 +381,6 @@ export const xrkChannel: ChannelPlugin<
   outbound: {
     deliveryMode: "direct" as const,
     sendText: async ({ to, text, accountId }) => {
-      console.warn(`[XRK-Bridge] outbound.sendText 被调用 to=${to} text=${text ? `有(${String(text).length}字)` : "无"} accountId=${accountId ?? "未传"}`);
       const client = getClientForAccount(accountId || DEFAULT_ACCOUNT_ID);
       if (!client) {
         return { channel: "xrk-agt", sent: false, error: "Client not connected", messageId: null };
@@ -456,63 +407,22 @@ export const xrkChannel: ChannelPlugin<
 
       return { channel: "xrk-agt", sent: true, messageId: null };
     },
-    sendMedia: async (opts: Record<string, unknown> & { to: string; text?: string; mediaUrl?: string; accountId?: string }) => {
-      // 显示名：优先用核心传入的 name/fileName/displayName/…，若无则从 mediaUrl 路径推断（当前核心只传 mediaUrl 不传 name，实际多为路径推断）
-      const { to, text, mediaUrl, accountId } = opts;
-      const fileObj = opts.file && typeof opts.file === "object" && !Array.isArray(opts.file) ? (opts.file as Record<string, unknown>) : null;
-      const nameParam = [
-        opts.name,
-        opts.fileName,
-        opts.filename,
-        opts.displayName,
-        (opts as Record<string, unknown>).file_name,
-        fileObj?.name,
-      ]
-        .find((v): v is string => typeof v === "string" && v.trim().length > 0)
-        ?.trim();
-      const allKeys = opts ? Object.keys(opts).filter(k => opts[k] != null) : [];
-      const mediaUrlPreview = mediaUrl && typeof mediaUrl === "string" ? (mediaUrl.length > 80 ? `${mediaUrl.slice(0, 80)}…` : mediaUrl) : "(空)";
-      console.warn(
-        `[XRK-Bridge] outbound.sendMedia 被调用 收到参数 keys=[${allKeys.join(",")}] to=${to} text=${text ? "有" : "无"} mediaUrl=${mediaUrlPreview} name=${nameParam ?? "(未传)"} accountId=${accountId ?? "未传"}`,
-      );
-
-      const client = getClientForAccount((accountId as string) || DEFAULT_ACCOUNT_ID);
+    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
+      const client = getClientForAccount(accountId || DEFAULT_ACCOUNT_ID);
       if (!client) return { channel: "xrk-agt", sent: false, error: "Client not connected", messageId: null };
 
-      const toStr = typeof to === "string" ? to : "";
-      const { resolved, error: resolveError } = resolveTo(toStr, (accountId as string) || DEFAULT_ACCOUNT_ID);
+      const { resolved, error: resolveError } = resolveTo(to, accountId || DEFAULT_ACCOUNT_ID);
       if (resolveError) return { channel: "xrk-agt", sent: false, error: resolveError, messageId: null };
 
       const [kind, ...parts] = resolved.split(":");
       const outMediaUrls: string[] = [];
-      const outFiles: { url: string; name?: string }[] = [];
-      const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".heic", ".heif", ".avif"]);
 
-      const mediaUrlStr = typeof mediaUrl === "string" ? mediaUrl : undefined;
-      if (mediaUrlStr) {
-        const processed = await processUrl(mediaUrlStr);
-        if (processed) {
-          const inferredName = nameParam || defaultFileNameFromUrl(mediaUrlStr);
-          const ext = path.extname(inferredName || mediaUrlStr).toLowerCase();
-          const isImage = inferredName && IMAGE_EXTS.has(ext);
-          console.warn(
-            `[XRK-Bridge] sendMedia 转换: processed=${processed.startsWith("base64://") ? "base64(已读)" : "url"} inferredName=${inferredName ?? "(无)"} ext=${ext} → ${isImage ? "mediaUrls(图片)" : inferredName ? "files(带name)" : "mediaUrls(无name)"}`,
-          );
-          if (isImage) {
-            outMediaUrls.push(processed);
-          } else if (inferredName) {
-            outFiles.push({ url: processed, name: inferredName });
-          } else {
-            outMediaUrls.push(processed);
-          }
-        } else {
-          console.warn(`[XRK-Bridge] sendMedia processUrl 失败 mediaUrl 无法读取或无效`);
-        }
-      } else {
-        console.warn(`[XRK-Bridge] sendMedia 未收到 mediaUrl，跳过文件`);
+      if (mediaUrl) {
+        const processed = await processUrl(mediaUrl);
+        if (processed) outMediaUrls.push(processed);
       }
 
-      const selfId = loadState().lastSelfId[(accountId as string) || DEFAULT_ACCOUNT_ID];
+      const selfId = loadState().lastSelfId[accountId || DEFAULT_ACCOUNT_ID];
       const toData = kind === "group" && parts.length > 0
         ? { kind: "group" as const, userId: "", groupId: parts[0], selfId }
         : kind === "user" && parts.length > 0
@@ -521,24 +431,17 @@ export const xrkChannel: ChannelPlugin<
 
       if (!toData) return { channel: "xrk-agt", sent: false, error: "Invalid target format (use user:QQ or group:ID)", messageId: null };
 
-      console.warn(
-        `[XRK-Bridge] sendMedia 将发往 XRK: text=${text ? "有" : "无"} mediaUrls=${outMediaUrls.length} files=${outFiles.length}${outFiles.length ? ` names=[${outFiles.map(f => f.name ?? "").join(", ")}]` : ""}`,
-      );
-      client.sendReply({
-        id: Date.now().toString(),
-        selfId,
-        to: toData,
-        text: typeof text === "string" ? text : undefined,
-        mediaUrls: outMediaUrls.length ? outMediaUrls : undefined,
-        files: outFiles.length ? outFiles : undefined,
-      });
+      client.sendReply({ id: Date.now().toString(), selfId, to: toData, text, mediaUrls: outMediaUrls });
       return { channel: "xrk-agt", sent: true, messageId: null };
     },
   },
 };
 
-/** 确保指定账号的 XRK 客户端存在（入站监听在创建 client 时已挂载，此处仅触发创建） */
 export function attachInboundHandlerForAccount(accountId: string) {
-  getClientForAccount(accountId);
+  const client = getClientForAccount(accountId);
+  if (!client) return;
+  client.on("message", (event: XrkInboundMessage) =>
+    void handleInboundFromXrk(accountId, event),
+  );
 }
 
