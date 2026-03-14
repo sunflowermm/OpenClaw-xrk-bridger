@@ -12,7 +12,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "publish:npm": "npm publish --registry https://registry.npmjs.org/ --access public",
-    "publish:github": "node -e \"process.env.npm_config_at_sunflowermm_registry='https://npm.pkg.github.com/'; require('child_process').execSync('npm publish', {stdio:'inherit', env:process.env});\"",
+    "publish:github": "node scripts/publish-github.js",
     "publish:both": "npm run publish:npm && npm run publish:github",
     "release": "npm version patch && npm run publish:both"
   },

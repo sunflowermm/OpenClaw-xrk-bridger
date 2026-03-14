@@ -1,0 +1,3 @@
+# 仅用于 publish:github，临时替换 .npmrc 后发到 GitHub Packages
+registry=https://npm.pkg.github.com/
+@sunflowermm:registry=https://npm.pkg.github.com/
