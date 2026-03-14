@@ -129,6 +129,10 @@ function getClientForAccount(accountId: string): XrkBridgeClient | null {
     console.log(`[XRK-AGT] Bridge disconnected for account ${accountId}`);
     connectedByAccount.set(accountId, false);
   });
+  // 入站消息只在此处挂载一次，避免 register 多次执行时重复挂载导致一条消息触发多次 agent
+  client.on("message", (event: XrkInboundMessage) =>
+    void handleInboundFromXrk(accountId, event),
+  );
   client.connect();
   clients.set(accountId, client);
   return client;
@@ -437,11 +441,8 @@ export const xrkChannel: ChannelPlugin<
   },
 };
 
+/** 确保指定账号的 XRK 客户端存在（入站监听在创建 client 时已挂载，此处仅触发创建） */
 export function attachInboundHandlerForAccount(accountId: string) {
-  const client = getClientForAccount(accountId);
-  if (!client) return;
-  client.on("message", (event: XrkInboundMessage) =>
-    void handleInboundFromXrk(accountId, event),
-  );
+  getClientForAccount(accountId);
 }
 
