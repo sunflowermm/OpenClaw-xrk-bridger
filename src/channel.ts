@@ -22,6 +22,25 @@ async function processUrl(url: string): Promise<string | null> {
   return null;
 }
 
+/** 从 URL 推断默认文件名（仅当 agent 未提供 name 时用） */
+function defaultFileNameFromUrl(url: string): string | undefined {
+  if (!url || url.startsWith("base64://")) return undefined;
+  try {
+    if (url.startsWith("file://")) {
+      const p = url.replace(/^file:\/\/+/i, "").replace(/^\/([A-Za-z]:)/, "$1");
+      return path.basename(p) || undefined;
+    }
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      const u = new URL(url);
+      const segment = path.basename(u.pathname);
+      return segment || undefined;
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
 export type ResolvedXrkAccount = {
   accountId: string;
   name?: string;
@@ -179,31 +198,21 @@ async function handleInboundFromXrk(accountId: string, event: XrkInboundMessage)
     const client = getClientForAccount(accountId);
     if (!client) return;
 
-    const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif', '.avif'];
+    const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".heic", ".heif", ".avif"]);
     const outMediaUrls: string[] = [];
     const outFiles: { url: string; name?: string }[] = [];
 
-    const processFile = async (url: string, name?: string) => {
+    const items: { url: string; name?: string }[] = [
+      ...(payload.files?.filter((f: any) => f.url).map((f: any) => ({ url: f.url, name: f.name })) ?? []),
+      ...(payload.mediaUrls?.map((url: string) => ({ url })) ?? []),
+    ];
+    for (const { url, name } of items) {
       const processed = await processUrl(url);
-      if (!processed) return;
-      const ext = path.extname(name || url).toLowerCase();
-      if (IMAGE_EXTS.includes(ext)) {
-        outMediaUrls.push(processed);
-      } else {
-        outFiles.push({ url: processed, name });
-      }
-    };
-
-    if (payload.files) {
-      for (const f of payload.files) {
-        if (f.url) await processFile(f.url, f.name);
-      }
-    }
-
-    if (payload.mediaUrls) {
-      for (const url of payload.mediaUrls) {
-        await processFile(url);
-      }
+      if (!processed) continue;
+      const resolvedName = name?.trim() || defaultFileNameFromUrl(url);
+      const ext = path.extname(resolvedName || url).toLowerCase();
+      if (IMAGE_EXTS.has(ext)) outMediaUrls.push(processed);
+      else outFiles.push({ url: processed, name: resolvedName || undefined });
     }
 
     if (!outMediaUrls.length && mediaUrls.length) outMediaUrls.push(...mediaUrls);
