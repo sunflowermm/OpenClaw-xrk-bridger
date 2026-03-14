@@ -6,6 +6,9 @@ description: |
 
 # 发送 QQ 媒体与文件（给 AI）
 
+> **适用范围**：本 SKILL 仅在你通过 **`xrk-agt` 通道（openclaw-xrk-bridger 插件）** 向 QQ 发送媒体/文件时适用。  
+> 若当前会话不是来自 XRK-AGT（上下文中没有 QQ 号/群号、`Provider: "xrk-agt"` / `Channel: "xrk-agt"` 等信息），请不要假定可以访问本机 QQ，也不要按本说明构造 QQ 文件消息。
+
 ## 发文件：路径 + 建议带 name
 
 **发 PPT/Word/视频/音频/PDF 等文件时：**

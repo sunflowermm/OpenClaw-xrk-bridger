@@ -6,6 +6,9 @@ description: |
 
 # QQ 聊天回复（给 AI）
 
+> **适用范围**：本 SKILL 仅在你通过 **`xrk-agt` 通道（openclaw-xrk-bridger 插件）** 与 QQ 用户对话时适用。  
+> 如果当前上下文没有 QQ 号/群号、也没有 `Provider: "xrk-agt"` / `Channel: "xrk-agt"` 等字段，请视为“非 QQ 场景”，不要按本说明构造 QQ 消息。
+
 ## 你能做什么
 
 - 只输出文字 → 自动发到**当前 QQ 会话**。

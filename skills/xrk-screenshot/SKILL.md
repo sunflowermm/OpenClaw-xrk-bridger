@@ -6,6 +6,9 @@ description: |
 
 # 截图并发到 QQ（给 AI）
 
+> **适用范围**：本 SKILL 仅在你通过 **`xrk-agt` 通道（openclaw-xrk-bridger 插件）** 与 QQ 交互时适用。  
+> 若当前上下文不是 XRK-AGT / QQ 场景（没有 QQ 号/群号、也没有 `Provider: "xrk-agt"` / `Channel: "xrk-agt"` 等字段），请不要假定可以给 QQ 发截图。
+
 ## 流程
 
 1. 用 Node 脚本调用 `screenshot-desktop` 截屏并保存到本地，得到文件路径。

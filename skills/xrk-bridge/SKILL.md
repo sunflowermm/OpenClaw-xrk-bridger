@@ -7,11 +7,14 @@ description: |
 
 # XRK Bridge（给 AI 的底层说明）
 
+> **适用范围**：本 SKILL 仅当当前会话来源为 **`xrk-agt` 通道（openclaw-xrk-bridger 插件）** 时适用。  
+> 若上下文中看不到 `Provider: "xrk-agt"` / `Channel: "xrk-agt"` / QQ 群号 / QQ 号等 XRK 字段，请认为此时并非通过 XRK-AGT 与 QQ 交互，不要假定自己在 QQ 里，也不要按本说明构造 QQ 消息。
+
 ## 0. 你需要记住的三句话
 
 - 这条桥接由 XRK-AGT 端的 `core/Openclaw-Core/tasker/XrkBridge.js` 实现（Tasker：`XrkBridgeTasker`），WS 路径为 **`/XrkBridge`**。
 - **正常对话**：QQ 事件被 XRK-AGT 转成一条 `type: "message"` 发给 OpenClaw；你在 OpenClaw 侧产出 `type: "reply"` 再发回 XRK-AGT，XRK-AGT 会把回复回送到 QQ。
-- **你不需要碰 WebSocket**；你只需要产出正确的回复对象：`text` / `mediaUrls` / `files`（以及必要时的 `to`）。
+- **你不需要碰 WebSocket**；你只需要产出正确的回复对象：`text` / `mediaUrls` / `files`（以及必要时的 `to`）。OpenClaw 会在每条回复准备好时调用底层 `deliver`，这些回复会一条一条经由 XRK-AGT 发到 QQ，所以可以拆成多条短消息，而不是“憋到最后一次性发一大段”。
 
 ## 1. XRK-AGT 端转发逻辑（概念级，和实现一致）
 

@@ -6,6 +6,9 @@ description: |
 
 # XRK-AGT 通道：AI 怎么用
 
+> **适用范围**：本 SKILL 只在当前会话来自 **`xrk-agt` 通道（openclaw-xrk-bridger 插件）** 时适用。  
+> 如果你看不到 QQ 群号 / QQ 号 / `Provider: "xrk-agt"` / `Channel: "xrk-agt"` 等上下文字段，请视为“非 XRK 通道”，不要假定自己在 QQ 里，也不要按本说明构造 QQ 消息。
+
 你收到的消息来自 **XRK-AGT Bridge**：QQ 上的文字/图片/文件会先到 XRK-AGT（`core/Openclaw-Core/tasker/XrkBridge.js`），再通过 WebSocket 发给 OpenClaw，最后由扩展转成会话上下文交给你。
 
 你的回复会由扩展打包成 `reply` 发回 XRK-AGT，再发到 QQ。你**只需要按下面格式输出**，不用管 WebSocket 或协议细节。
