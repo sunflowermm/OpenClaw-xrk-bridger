@@ -1,6 +1,7 @@
 {
   "id": "openclaw-xrk-bridger",
   "channels": ["xrk-agt"],
+  "skills": ["./skills"],
   "configSchema": {
   "type": "object",
   "additionalProperties": false,
@@ -22,8 +23,7 @@
     },
     "accessToken": {
       "label": "XRK-AGT 鉴权 Token",
-      "sensitive": true
+      "inputType": "password"
     }
   }
 }
-

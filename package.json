@@ -1,6 +1,6 @@
 {
   "name": "@sunflowermm/openclaw-xrk-bridger",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
   },
@@ -10,7 +10,11 @@
   "author": "XRK",
   "license": "MIT",
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "publish:npm": "npm publish --registry https://registry.npmjs.org/ --access public",
+    "publish:github": "npm publish",
+    "publish:both": "npm run publish:npm && npm run publish:github",
+    "release": "npm version patch && npm run publish:both"
   },
   "dependencies": {
     "openclaw": "^2026.3.0",
