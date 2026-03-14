@@ -116,6 +116,36 @@ openclaw plugins install openclaw-xrk-bridger
 
 ---
 
+## 底层谁在发文件（.openclaw 内）
+
+本插件内**实际把文件发到 XRK** 的只有两处，都在 `src/channel.ts`：
+
+| 路径 | 触发方 | 说明 |
+|------|--------|------|
+| **`deliver(payload)`** | OpenClaw 运行时 `dispatchReplyFromConfig` 在 Agent 回复就绪后回调 | 收到 `payload.files` / `payload.mediaUrls`，转成 `client.sendReply({ text, mediaUrls, files })` 发往 XRK。若 runtime 只传 `mediaUrls` 不传 `files`，则无文件名。 |
+| **`outbound.sendMedia({ to, text, mediaUrl, accountId, name? })`** | 核心的 **message 工具**（Agent 调「发文件」时） | 原先只发 `mediaUrls`，无 `name`，导致 QQ 显示 `file.pptx`。**已改**：从 `mediaUrl` 路径推断文件名（或使用传入的 `name`），非图片一律用 `files: [{ url, name }]` 发往 XRK，QQ 即可显示正确文件名。 |
+
+结论：**负责发送文件的是上述两处**；其中「Agent 用 message 工具发文件」走 **sendMedia**。当前核心只传 `mediaUrl` 不传 `name`，QQ 上正确显示的文件名来自本插件的**路径推断**；若核心后续传入 `name`，会优先使用。
+
+---
+
+## 排查：回复带文件但 QQ 显示 file.xxx / 后端收到「两文件 + 三次文字」
+
+**现象**：OpenClaw 终端里 `[XRK-Bridge] deliver 收到 payload` 一直显示 `mediaUrls=0 files=0`，但 XRK 端实际收到了带文件的回复，且 QQ 上文件名为 `file.pptx`。
+
+**原因**：带附件的回复走的是 **outbound.sendMedia**（message 工具），未走 `deliver`。旧版 sendMedia 只发 `mediaUrls`，不带 `name`。
+
+**已做修改**：`sendMedia` 现会从 `mediaUrl`（如本地路径、`file://`）推断文件名，并支持可选参数 `name`；非图片一律以 `files: [{ url, name }]` 发往 XRK，QQ 会显示正确名称。若核心的 message 工具把 `name` 一并传给 sendMedia，会优先使用该 `name`。
+
+**调试日志说明**（全在 `[XRK-Bridge]` 前缀下）：
+
+- **deliver 路径**（Agent 回复走统一派发时）：会看到 `deliver 收到 payload: keys=[...] text=有/无 mediaUrls=N files=M`，接着 `sendReply 将发往 XRK`，最后 `client.sendReply 发出 → XRK`。若这里始终是 `mediaUrls=0 files=0`，说明**带文件的回复没有走 deliver**。
+- **sendMedia 路径**（Agent 用 message 工具发文件时）：应看到 `outbound.sendMedia 被调用 to=... mediaUrl=... name=...`，接着 `sendMedia 转换: ... inferredName=... → files(带name)`，再 `sendMedia 将发往 XRK: ... files=1 names=[...]`，最后 `client.sendReply 发出 → XRK: ... files=1 fileNames=[...]`。
+- **若发文件时从没出现过 `outbound.sendMedia 被调用`**：说明核心没有通过本插件的 `sendMedia` 发文件，而是用**别的路径**（例如直接写 WebSocket、或走其他 channel 接口）。需要在 OpenClaw 主仓里搜「发文件 / 发 reply / message 工具实现」，确认是否调用了当前 channel 的 `outbound.sendMedia` 并传入 `mediaUrl`（及尽量带 `name`）。
+- **若 AI 说传了 name 但日志显示 name=(未传)**：看同一条日志里的 **`收到参数 keys=[...]`**，核心可能用了别的字段名。本插件已从下列任一字段取显示名（优先第一个有值）：`name`、`fileName`、`filename`、`displayName`、`file_name`、`file.name`。若 keys 里有你期望的档名但字段名不在上述列表，可在 bridger 的 `sendMedia` 里为该字段加一次读取。
+
+---
+
 ## 🔗 相关项目
 
 - **XRK-AGT 主项目**：[`XRK-AGT`](https://github.com/sunflowermm/XRK-AGT)  

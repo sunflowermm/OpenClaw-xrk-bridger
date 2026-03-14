@@ -106,6 +106,11 @@ export class XrkBridgeClient extends EventEmitter {
 
   sendReply(reply: XrkOutboundReply) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const nMedia = reply.mediaUrls?.length ?? 0;
+    const nFiles = reply.files?.length ?? 0;
+    console.warn(
+      `[XRK-Bridge] client.sendReply 发出 → XRK: text=${reply.text ? "有" : "无"} mediaUrls=${nMedia} files=${nFiles}${nFiles ? ` fileNames=[${(reply.files ?? []).map(f => f.name ?? "").join(", ")}]` : ""}`,
+    );
     try {
       this.ws.send(JSON.stringify({ type: "reply", ...reply }));
     } catch {

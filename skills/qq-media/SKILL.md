@@ -1,21 +1,30 @@
 ---
 name: qq-media
 description: |
-  给 AI 用的 QQ 媒体与文件发送说明。支持图片、视频、音频、办公文档等所有类型，路径由 bridger 与 XRK 统一处理。
+  QQ 媒体与文件发送：路径用真实本机路径；底层会从路径推断文件名，QQ 能正确显示。建议同时传 name（与路径一致的真实文件名）。
 ---
 
 # 发送 QQ 媒体与文件（给 AI）
 
+## 发文件：路径 + 建议带 name
+
+**发 PPT/Word/视频/音频/PDF 等文件时：**
+
+- **路径**：必须用真实存在的本机路径（如 `C:\Users\xxx\Desktop\Git 使用与验证原理.pptx`）。底层会从路径**自动推断文件名**，QQ 会显示正确名称（例如「Git 使用与验证原理.pptx」）。
+- **name**：当前通过 message 工具发文件时，核心只传路径不传 name，显示名由底层从路径推断。**仍建议你在回复里带 `name`**（与路径末尾文件名一致），便于以后核心支持时直接使用，且多文件时更清晰。
+- 正确示例（桌面一个 PPT）：
+  `"files": [{ "url": "C:/Users/xxx/Desktop/Git 使用与验证原理.pptx", "name": "Git 使用与验证原理.pptx" }]`
+- 多文件时每项都带 url + name，例如：
+  `"files": [{ "url": "...", "name": "Git 使用与验证原理.pptx" }, { "url": "...", "name": "OpenClaw 部署与逻辑.pptx" }]`
+
+不要写通用名如「文件.pptx」；不要编造不存在的路径。
+
 ## 支持的格式
 
 - **图片**：`mediaUrls` 或 `files`，扩展名/内容为图片即可按图片发送。
-- **视频**：`files` 中放 `{ url, name? }`，支持 mp4、webm、mov、avi、mkv 等，会按 QQ 视频段发送。
-- **音频**：`files` 中放 `{ url, name? }`，支持 mp3、wav、m4a、ogg、flac 等，会按 QQ 语音段发送。
-- **办公/其他**：`files` 中放 `{ url, name? }`，如 ppt/pptx、doc/docx、xls/xlsx、pdf 等，会按文件发送且尽量保留正确文件名。
+- **视频/音频/办公/其他**：一律用 `files`，每项 `{ url, name }`，name 填真实文件名（含后缀），如 `介绍.mp4`、`报告.pptx`。
 
-## 字段与路径
+## 路径与类型
 
-- **mediaUrls**：`["C:/path/to/image.png"]`，多图可写多元素。
-- **files**：`[{ "url": "C:/path/to/视频.mp4", "name": "视频.mp4" }]`，建议带 `name` 以便 QQ 显示正确文件名。
-- 支持：本机绝对路径、`file://`、`http(s)://`、`base64://`。bridger 与 XRK 会按扩展名或内容识别类型并转成 QQ 可发格式。
+- 支持：本机绝对路径、`file://`、`http(s)://`、`base64://`。
 - 不要编造本机路径；不确定时让用户提供路径，或只回文字。

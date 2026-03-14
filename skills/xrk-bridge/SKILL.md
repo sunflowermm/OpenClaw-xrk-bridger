@@ -50,7 +50,7 @@ OpenClaw → XRK-AGT 的入站消息处理：
 
 - `text`：要发回 QQ 的文字（可选）。
 - `mediaUrls: string[]`：要发回 QQ 的图片/媒体（可选）。
-- `files: { url: string, name?: string }[]`：要发回 QQ 的文件（可选）。
+- `files: { url: string, name?: string }[]`：要发回 QQ 的文件（可选）。**建议为每一项传 `name` 且为真实文件名**（如 `Git 使用与验证原理.pptx`）；若只传 url 且为本机路径，底层会从路径推断文件名。
 
 > 绝大多数场景不要指定 `to`，让系统“回复当前触发会话”即可。
 
