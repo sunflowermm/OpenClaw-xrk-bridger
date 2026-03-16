@@ -38,7 +38,7 @@
 在任意终端执行（需 OpenClaw CLI 已安装且已配置 npm registry）：
 
 ```bash
-openclaw plugins install openclaw-xrk-bridger
+openclaw plugins install @sunflowermm/openclaw-xrk-bridger
 ```
 
 安装完成后，OpenClaw 会在：
