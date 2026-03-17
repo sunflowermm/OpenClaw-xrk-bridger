@@ -44,6 +44,19 @@ const lastToByAccount = new Map<string, string>();
 const lastInboundAtByAccount = new Map<string, number>();
 /** 每个账号当前 WebSocket 是否处于连接状态 */
 const connectedByAccount = new Map<string, boolean>();
+/** 按入站 event.id 聚合 outbound（保证 text→媒体顺序，避免重复发送） */
+const outboundBufferByInboundId = new Map<
+  string,
+  {
+    firstAt: number;
+    lastAt: number;
+    text?: string;
+    mediaUrls: string[];
+    files: { url: string; name?: string }[];
+    flushTimer: any | null;
+    sent: boolean;
+  }
+>();
 
 const STATE_DIR = process.env.OPENCLAW_STATE_DIR || path.join(process.cwd(), ".openclaw", "state");
 const STATE_FILE = path.join(STATE_DIR, "xrk-bridger-state.json");
@@ -175,18 +188,39 @@ async function handleInboundFromXrk(accountId: string, event: XrkInboundMessage)
     const client = getClientForAccount(accountId);
     if (!client) return;
 
+    /**
+     * OpenClaw runtime 可能对同一条入站消息多次回调 deliver（分段产出：先图片、后文本，或文本重复）。
+     * 如果我们“来一段发一段”，XRK/QQ 侧就会出现乱序（图片先到）与重复发送。
+     *
+     * 这里对同一条入站 event.id 做短窗口合并：
+     * - 收到的 text/media/files 会聚合到一个 buffer
+     * - 优先等待 text（若会出现），然后一次性把 text + 全部媒体发给 XRK
+     * - 超时仍无 text，则仅发媒体（保持可用性）
+     */
+    const key = String((event as any).id || "");
+    if (!key) return;
+
+    const buf = outboundBufferByInboundId.get(key) ?? {
+      firstAt: Date.now(),
+      lastAt: Date.now(),
+      text: undefined as string | undefined,
+      mediaUrls: [] as string[],
+      files: [] as { url: string; name?: string }[],
+      flushTimer: null as any | null,
+      sent: false,
+    };
+    buf.lastAt = Date.now();
+
     const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif', '.avif'];
-    const outMediaUrls: string[] = [];
-    const outFiles: { url: string; name?: string }[] = [];
 
     const processFile = async (url: string, name?: string) => {
       const processed = await processUrl(url);
       if (!processed) return;
       const ext = path.extname(name || url).toLowerCase();
       if (IMAGE_EXTS.includes(ext)) {
-        outMediaUrls.push(processed);
+        buf.mediaUrls.push(processed);
       } else {
-        outFiles.push({ url: processed, name });
+        buf.files.push({ url: processed, name });
       }
     };
 
@@ -202,22 +236,63 @@ async function handleInboundFromXrk(accountId: string, event: XrkInboundMessage)
       }
     }
 
-    if (!outMediaUrls.length && mediaUrls.length) outMediaUrls.push(...mediaUrls);
-    if (!payload.text && !outMediaUrls.length && !outFiles.length) return;
+    // payload.text 可能会在后续回调才出现；这里先聚合，不直接发送
+    if (typeof payload.text === "string" && payload.text.trim()) {
+      buf.text = payload.text;
+    }
 
-    client.sendReply({
-      id: (event as any).id,
-      selfId: event.selfId,
-      to: {
-        kind: isGroup ? "group" as const : "direct" as const,
-        userId: event.userId,
-        groupId: event.groupId,
+    // 兜底：如果 runtime 从未把媒体挂在 payload 上，则保留入站媒体
+    if (!buf.mediaUrls.length && mediaUrls.length) buf.mediaUrls.push(...mediaUrls);
+
+    // 去重（避免同一个 url/name 被重复 append）
+    buf.mediaUrls = Array.from(new Set(buf.mediaUrls));
+    const fileKey = (f: { url: string; name?: string }) => `${f.url}::${f.name ?? ""}`;
+    const fileMap = new Map<string, { url: string; name?: string }>();
+    for (const f of buf.files) fileMap.set(fileKey(f), f);
+    buf.files = Array.from(fileMap.values());
+
+    outboundBufferByInboundId.set(key, buf);
+
+    const flush = () => {
+      const current = outboundBufferByInboundId.get(key);
+      if (!current || current.sent) return;
+
+      const now = Date.now();
+      const hasText = Boolean(current.text && String(current.text).trim());
+      const hasMedia = (current.mediaUrls?.length ?? 0) > 0 || (current.files?.length ?? 0) > 0;
+      if (!hasText && !hasMedia) return;
+
+      // 等一等 text：若先到媒体、后到文本，则保证“文本→图片”顺序
+      const WAIT_TEXT_MS = 800;
+      if (!hasText && hasMedia && now - current.firstAt < WAIT_TEXT_MS) {
+        current.flushTimer = setTimeout(flush, 120);
+        return;
+      }
+
+      current.sent = true;
+      outboundBufferByInboundId.set(key, current);
+      client.sendReply({
+        id: (event as any).id,
         selfId: event.selfId,
-      },
-      text: payload.text,
-      mediaUrls: outMediaUrls,
-      files: outFiles.length ? outFiles : undefined,
-    });
+        to: {
+          kind: isGroup ? "group" as const : "direct" as const,
+          userId: event.userId,
+          groupId: event.groupId,
+          selfId: event.selfId,
+        },
+        text: current.text,
+        mediaUrls: current.mediaUrls.length ? current.mediaUrls : undefined,
+        files: current.files.length ? current.files : undefined,
+      });
+
+      // 清理 buffer，防止长期积累
+      setTimeout(() => outboundBufferByInboundId.delete(key), 10_000);
+    };
+
+    if (buf.flushTimer) clearTimeout(buf.flushTimer);
+    // 小窗口合并：给 runtime 一个机会把 text 与多张图一并送进来
+    buf.flushTimer = setTimeout(flush, 180);
+    outboundBufferByInboundId.set(key, buf);
   };
 
   const { dispatcher, replyOptions } =
