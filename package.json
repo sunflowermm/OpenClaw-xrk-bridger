@@ -17,7 +17,7 @@
     "release": "npm version patch && npm run publish:both"
   },
   "dependencies": {
-    "openclaw": "^2026.3.0",
+    "openclaw": "*",
     "ws": "^8.17.0"
   },
   "devDependencies": {
