@@ -440,8 +440,15 @@ export const xrkChannel: ChannelPlugin<
 export function attachInboundHandlerForAccount(accountId: string) {
   const client = getClientForAccount(accountId);
   if (!client) return;
-  client.on("message", (event: XrkInboundMessage) =>
-    void handleInboundFromXrk(accountId, event),
-  );
+  // 该插件可能在热重载/重复 register 时被多次调用；如果不去重，会叠加 message 监听器，
+  // 导致同一条 XRK 入站消息被处理多次（表现为 client.sendReply 连续发出两次）。
+  // 这里按账号确保只挂一个监听器。
+  const existing = inboundHandlerByAccount.get(accountId);
+  if (existing) client.off("message", existing);
+  const handler = (event: XrkInboundMessage) => void handleInboundFromXrk(accountId, event);
+  inboundHandlerByAccount.set(accountId, handler);
+  client.on("message", handler);
 }
+
+const inboundHandlerByAccount = new Map<string, (event: XrkInboundMessage) => void>();
 
