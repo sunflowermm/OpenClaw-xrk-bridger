@@ -1,3 +1,9 @@
+---
+name: xrk-screenshot
+description: |
+  XRK-AGT / QQ 场景下的桌面截图指引：生成本机截图文件，再通过 mediaUrls/files 发回 QQ。
+---
+
 # XRK 截图技能（桌面环境）
 
 ## 技能概述
